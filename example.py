@@ -25,7 +25,7 @@ from requests.packages.urllib3.exceptions import InsecureRequestWarning
 from requests.adapters import ConnectionError
 from requests.models import InvalidURL
 from transform import *
-
+from math import radians, cos, sin, asin, sqrt
 from pymongo import MongoClient
 
 requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
@@ -45,7 +45,6 @@ def resetSession():
 
 DEBUG = True
 VERBOSE_DEBUG = False  # if you want to write raw request/response to the console
-deflat, deflng = 0, 0
 
 mongoConf = open('mongo.conf', 'r')
 conn = MongoClient(mongoConf.read())
@@ -53,6 +52,22 @@ mongo = conn.pokemon
 
 # stuff for in-background search thread
 search_thread = None
+
+def haversine(lon1, lat1, lon2, lat2):
+    """
+    Calculate the great circle distance between two points
+    on the earth (specified in decimal degrees)
+    """
+    # convert decimal degrees to radians
+    lon1, lat1, lon2, lat2 = map(radians, [lon1, lat1, lon2, lat2])
+
+    # haversine formula
+    dlon = lon2 - lon1
+    dlat = lat2 - lat1
+    a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
+    c = 2 * asin(sqrt(a))
+    r = 6371 # Radius of earth in kilometers. Use 3956 for miles
+    return c * r
 
 def parse_unicode(bytestring):
     decoded_string = bytestring.decode(sys.getfilesystemencoding())
@@ -127,6 +142,7 @@ def set_location_coords(lat, long, alt):
     return [f2i(lat), f2i(long), f2i(alt)]
     # 0x4042bd7c00000000 # f2i(lat)
     # 0xc05e8aae40000000 #f2i(long)
+
 
 def retrying_api_req(api_endpoint, access_token, lat, long, *args, **kwargs):
     tries = 0
@@ -237,6 +253,7 @@ def get_profile(access_token, api, useauth, lat, long, *reqq):
     req5.type = 5
     if len(reqq) >= 5:
         req5.MergeFrom(reqq[4])
+
     return retrying_api_req(api, access_token, lat, long, req, useauth=useauth)
 
 
@@ -326,6 +343,12 @@ def get_heartbeat(api_endpoint, access_token, response, lat, long):
 
 
 def visit_stop(api_endpoint, access_token, response, stopid, ulat, ulong, lat, long):
+    if haversine(ulong, ulat, long, lat) > 0.1:
+        return
+
+    print "visiting"
+    time.sleep(20)
+
     m4 = pokemon_pb2.RequestEnvelop.Requests()
     m = pokemon_pb2.RequestEnvelop.MessageSingleInt()
     m.f1 = int(time.time() * 1000)
@@ -336,7 +359,7 @@ def visit_stop(api_endpoint, access_token, response, stopid, ulat, ulong, lat, l
     m5.message = m.SerializeToString()
     walk = sorted(getNeighbors(lat, long))
     m1 = pokemon_pb2.RequestEnvelop.Requests()
-    m1.type = 126
+    m1.type = 101
     m = pokemon_pb2.RequestEnvelop.MessageStop()
     m.fortid = stopid
     m.ulat = f2i(ulat)
@@ -354,6 +377,7 @@ def visit_stop(api_endpoint, access_token, response, stopid, ulat, ulong, lat, l
         m4,
         pokemon_pb2.RequestEnvelop.Requests(),
         m5)
+    print response
     if response is None:
         return
     payload = response.payload[0]
@@ -493,10 +517,10 @@ def _updateCell(steps, steplimit, loc, origin, profile_response, access_token, a
                            if Fort.GymPoints:
                                obj["team"] = Fort.Team
                                obj["guard"] = Fort.GuardPokemonId
+                               obj["guardcp"] = Fort.GuardPokemonLevel
                                obj["points"] = Fort.GymPoints
                            else:
                                pass
-                               #debug('visit stop ' + Fort.FortId)
                                #visit_stop(api_endpoint, access_token, profile_response, Fort.FortId, new_lat, new_long, Fort.Latitude, Fort.Longitude)
                            if Fort.LureInfo.LureExpiresTimestampMs:
                                obj["lure"] = datetime.utcfromtimestamp(Fort.LureInfo.LureExpiresTimestampMs/1000)
